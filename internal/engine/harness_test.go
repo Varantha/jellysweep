@@ -27,6 +27,7 @@ import (
 	sizefilter "github.com/jon4hz/jellysweep/internal/filter/size_filter"
 	streamfilter "github.com/jon4hz/jellysweep/internal/filter/stream_filter"
 	tagsfilter "github.com/jon4hz/jellysweep/internal/filter/tags_filter"
+	"github.com/jon4hz/jellysweep/internal/notify/discord"
 	"github.com/jon4hz/jellysweep/internal/policy"
 	"github.com/samber/lo"
 	jellyfinAPI "github.com/sj14/jellyfin-go/api"
@@ -88,6 +89,13 @@ func withNilStats() harnessOpt {
 
 func withTagMigration() harnessOpt {
 	return func(h *harness) { h.initialDBMigration = true }
+}
+
+// withDiscord sends Discord notifications to the given webhook URL.
+func withDiscord(webhookURL string) harnessOpt {
+	return func(h *harness) {
+		h.cfg.Discord = &config.DiscordConfig{Enabled: true, WebhookURL: webhookURL}
+	}
 }
 
 func newHarness(t *testing.T, opts ...harnessOpt) *harness {
@@ -158,6 +166,9 @@ func newHarness(t *testing.T, opts ...harnessOpt) *harness {
 	}
 	if h.stats != nil {
 		deps.stats = h.stats
+	}
+	if h.cfg.Discord != nil {
+		deps.discord = discord.New(h.cfg.Discord)
 	}
 
 	h.e, err = newEngine(h.cfg, db, h.initialDBMigration, deps)

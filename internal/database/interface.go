@@ -46,6 +46,13 @@ type DB interface {
 	MediaDB
 	RequestDB
 	HistoryDB
+	AnnouncementDB
+}
+
+// AnnouncementDB defines the interface for tracking which media items were announced.
+type AnnouncementDB interface {
+	GetDiscordAnnouncements(ctx context.Context) ([]DiscordAnnouncement, error)
+	RecordDiscordAnnouncements(ctx context.Context, announcements []DiscordAnnouncement) error
 }
 
 // MediaDB defines the interface for media-related database operations.

@@ -540,7 +540,7 @@ func (e *Engine) markForDeletion(ctx context.Context, mediaItems []arr.MediaItem
 	// Send email notifications before marking for deletion
 	e.sendEmailNotifications()
 	// Send Discord notifications before marking for deletion
-	e.sendDiscordNotifications()
+	e.sendDiscordNotifications(ctx)
 
 	// Send ntfy deletion summary notification
 	if err := e.sendNtfyDeletionSummary(ctx, mediaItems); err != nil {
