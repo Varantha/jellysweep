@@ -48,6 +48,7 @@ func NewFromGorm(db *gorm.DB) (*Client, bool, error) {
 		&UserPermissions{},
 		&EmailSettings{},
 		&HistoryEvent{},
+		&DiscordAnnouncement{},
 	); err != nil {
 		return nil, false, fmt.Errorf("failed to migrate database: %w", err)
 	}

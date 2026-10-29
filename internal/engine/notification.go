@@ -7,6 +7,7 @@ import (
 
 	"github.com/charmbracelet/log"
 	"github.com/jon4hz/jellysweep/internal/api/models"
+	"github.com/jon4hz/jellysweep/internal/database"
 	"github.com/jon4hz/jellysweep/internal/engine/arr"
 	"github.com/jon4hz/jellysweep/internal/notify/discord"
 	"github.com/jon4hz/jellysweep/internal/notify/email"
@@ -74,8 +75,15 @@ func (e *Engine) sendEmailNotifications() {
 	}
 }
 
-// sendDiscordNotifications sends a single Discord notification listing all media marked for deletion.
-func (e *Engine) sendDiscordNotifications() {
+type discordAnnouncementKey struct {
+	mediaType database.MediaType
+	arrID     int32
+}
+
+// sendDiscordNotifications sends a single Discord notification listing the media marked for deletion.
+// Items already announced within their library's cleanup delay are skipped, so an item that drops out
+// of the queue and is marked again on a later run (or after a restart) is not announced twice.
+func (e *Engine) sendDiscordNotifications(ctx context.Context) {
 	if e.discord == nil || !e.cfg.Discord.Enabled {
 		log.Debug("Discord service not configured or disabled, skipping notifications")
 		return
@@ -86,17 +94,40 @@ func (e *Engine) sendDiscordNotifications() {
 		return
 	}
 
+	lastAnnounced := make(map[discordAnnouncementKey]time.Time)
+	announcements, err := e.db.GetDiscordAnnouncements(ctx)
+	if err != nil {
+		log.Warn("Could not load previous Discord announcements, announcing all items", "error", err)
+	}
+	for _, a := range announcements {
+		lastAnnounced[discordAnnouncementKey{a.MediaType, a.ArrID}] = a.AnnouncedAt
+	}
+
+	now := time.Now()
 	discordItems := make([]discord.MediaItem, 0, len(e.data.allMediaItems))
+	newAnnouncements := make([]database.DiscordAnnouncement, 0, len(e.data.allMediaItems))
 	for _, item := range e.data.allMediaItems {
-		cleanupDate := time.Now()
+		var cleanupDelay time.Duration
 		if libCfg := e.cfg.GetLibraryConfig(item.LibraryName); libCfg != nil {
-			cleanupDate = cleanupDate.Add(time.Duration(libCfg.GetCleanupDelay()) * 24 * time.Hour)
+			cleanupDelay = time.Duration(libCfg.GetCleanupDelay()) * 24 * time.Hour
 		}
+
+		dbItem := arrMediaToDBMediaItem(item)
+		key := discordAnnouncementKey{dbItem.MediaType, dbItem.ArrID}
+		if last, ok := lastAnnounced[key]; ok && now.Sub(last) < cleanupDelay {
+			log.Debug("Skipping Discord announcement, item was already announced", "title", item.Title, "announcedAt", last)
+			continue
+		}
+		newAnnouncements = append(newAnnouncements, database.DiscordAnnouncement{
+			MediaType:   dbItem.MediaType,
+			ArrID:       dbItem.ArrID,
+			AnnouncedAt: now,
+		})
 
 		di := discord.MediaItem{
 			Title:       item.Title,
 			MediaType:   string(item.MediaType),
-			CleanupDate: cleanupDate,
+			CleanupDate: now.Add(cleanupDelay),
 		}
 		if item.RequestedBy != nil {
 			di.RequestedBy = item.RequestedBy.UserName
@@ -107,6 +138,11 @@ func (e *Engine) sendDiscordNotifications() {
 		discordItems = append(discordItems, di)
 	}
 
+	if len(discordItems) == 0 {
+		log.Info("All marked media items were already announced on Discord, skipping notification")
+		return
+	}
+
 	notification := discord.UserNotification{
 		MediaItems:    discordItems,
 		JellysweepURL: e.cfg.ServerURL,
@@ -115,6 +151,15 @@ func (e *Engine) sendDiscordNotifications() {
 
 	if err := e.discord.SendCleanupNotification(notification); err != nil {
 		log.Errorf("Failed to send Discord notification: %v", err)
+		return
+	}
+
+	// A dry run sends nothing, so it must not suppress the real announcement later.
+	if e.cfg.DryRun {
+		return
+	}
+	if err := e.db.RecordDiscordAnnouncements(ctx, newAnnouncements); err != nil {
+		log.Error("failed to record Discord announcements", "error", err)
 	}
 }
 
